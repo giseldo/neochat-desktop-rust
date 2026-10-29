@@ -9,6 +9,7 @@ pub const MODELS: &[&str] = &[
     "mistral-medium-latest",
     "mistral-large-latest",
     "open-mistral-nemo",
+    "deepseek-v4-1-flash-1017",
 ];
 
 pub const APP_DIR: &str = "NeoChat";
@@ -49,6 +50,12 @@ pub struct Config {
     pub theme: ThemeChoice,
     #[serde(default)]
     pub window_size: Option<[f32; 2]>,
+    #[serde(default = "default_font_scale")]
+    pub font_scale: f32,
+}
+
+fn default_font_scale() -> f32 {
+    1.0
 }
 
 impl Default for Config {
@@ -58,6 +65,7 @@ impl Default for Config {
             model,
             theme: ThemeChoice::Sistema,
             window_size: None,
+            font_scale: default_font_scale(),
         }
     }
 }
@@ -314,12 +322,14 @@ mod tests {
             model: "mistral-large-latest".to_string(),
             theme: ThemeChoice::Escuro,
             window_size: Some([900.0, 700.0]),
+            font_scale: 1.2,
         };
         let json = serde_json::to_string(&config).unwrap();
         let back: Config = serde_json::from_str(&json).unwrap();
         assert_eq!(back.model, config.model);
         assert_eq!(back.theme, ThemeChoice::Escuro);
         assert_eq!(back.window_size, Some([900.0, 700.0]));
+        assert_eq!(back.font_scale, 1.2);
     }
 
     #[test]

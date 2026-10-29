@@ -51,6 +51,7 @@ pub struct NeoChat {
     pub(super) delete: Option<String>,
     pub(super) markdown_cache: CommonMarkCache,
     applied_theme: Option<ThemeChoice>,
+    applied_font_scale: Option<f32>,
     last_window_size: Option<[f32; 2]>,
     centered: bool,
     pub(super) follow_output: bool,
@@ -63,6 +64,7 @@ impl NeoChat {
     pub fn new(cc: &eframe::CreationContext<'_>, store: Store) -> Self {
         theme::install_fonts(&cc.egui_ctx);
         theme::apply(&cc.egui_ctx, store.config.theme);
+        cc.egui_ctx.set_zoom_factor(store.config.font_scale);
 
         let api_key = std::env::var("MISTRAL_API_KEY")
             .ok()
@@ -96,6 +98,7 @@ impl NeoChat {
             delete: None,
             markdown_cache: CommonMarkCache::default(),
             applied_theme: None,
+            applied_font_scale: None,
             last_window_size: None,
             centered: false,
             follow_output: true,
@@ -107,6 +110,23 @@ impl NeoChat {
 
     pub(super) fn toggle_sidebar(&mut self) {
         self.sidebar_collapsed = !self.sidebar_collapsed;
+    }
+
+    pub(super) fn adjust_font_scale(&mut self, delta: f32) {
+        let next = (((self.store.config.font_scale + delta) * 10.0).round() / 10.0).clamp(0.8, 1.6);
+        if (next - self.store.config.font_scale).abs() < 0.001 {
+            return;
+        }
+        self.store.config.font_scale = next;
+        self.save();
+    }
+
+    pub(super) fn reset_font_scale(&mut self) {
+        if (self.store.config.font_scale - 1.0).abs() < 0.001 {
+            return;
+        }
+        self.store.config.font_scale = 1.0;
+        self.save();
     }
 
     pub fn busy(&self) -> bool {
@@ -419,14 +439,18 @@ impl NeoChat {
     }
 
     fn handle_shortcuts(&mut self, ctx: &Context) {
-        let (new_chat, settings, escape, toggle_sidebar) = ctx.input(|i| {
-            (
-                i.key_pressed(egui::Key::N) && i.modifiers.command,
-                i.key_pressed(egui::Key::Comma) && i.modifiers.command,
-                i.key_pressed(egui::Key::Escape),
-                i.key_pressed(egui::Key::B) && i.modifiers.command,
-            )
-        });
+        let (new_chat, settings, escape, toggle_sidebar, font_up, font_down, font_reset) =
+            ctx.input(|i| {
+                (
+                    i.key_pressed(egui::Key::N) && i.modifiers.command,
+                    i.key_pressed(egui::Key::Comma) && i.modifiers.command,
+                    i.key_pressed(egui::Key::Escape),
+                    i.key_pressed(egui::Key::B) && i.modifiers.command,
+                    i.key_pressed(egui::Key::Equals) && i.modifiers.command,
+                    i.key_pressed(egui::Key::Minus) && i.modifiers.command,
+                    i.key_pressed(egui::Key::Num0) && i.modifiers.command,
+                )
+            });
         if new_chat {
             self.new_conversation();
         }
@@ -435,6 +459,15 @@ impl NeoChat {
         }
         if toggle_sidebar {
             self.toggle_sidebar();
+        }
+        if font_up {
+            self.adjust_font_scale(0.1);
+        }
+        if font_down {
+            self.adjust_font_scale(-0.1);
+        }
+        if font_reset {
+            self.reset_font_scale();
         }
         if escape && self.busy() {
             self.stop();
@@ -509,14 +542,6 @@ impl NeoChat {
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    if ui
-                        .add(egui::Button::new(egui::RichText::new("☰").size(16.0)))
-                        .on_hover_text("Mostrar/ocultar conversas (Ctrl+B)")
-                        .clicked()
-                    {
-                        self.toggle_sidebar();
-                    }
-                    ui.add_space(6.0);
                     ui.label(
                         egui::RichText::new("NeoChat")
                             .size(18.0)
@@ -576,6 +601,12 @@ impl eframe::App for NeoChat {
             theme::apply(&ctx, self.store.config.theme);
             theme::sync_title_bar(&ctx, self.store.config.theme);
             self.applied_theme = Some(self.store.config.theme);
+        }
+
+        let font_scale = self.store.config.font_scale;
+        if self.applied_font_scale != Some(font_scale) {
+            ctx.set_zoom_factor(font_scale);
+            self.applied_font_scale = Some(font_scale);
         }
 
         self.handle_shortcuts(&ctx);
