@@ -56,6 +56,7 @@ pub struct NeoChat {
     pub(super) follow_output: bool,
     pub(super) jump_to_bottom: bool,
     pub(super) focus_composer: bool,
+    pub(super) sidebar_collapsed: bool,
 }
 
 impl NeoChat {
@@ -100,7 +101,12 @@ impl NeoChat {
             follow_output: true,
             jump_to_bottom: false,
             focus_composer: false,
+            sidebar_collapsed: false,
         }
+    }
+
+    pub(super) fn toggle_sidebar(&mut self) {
+        self.sidebar_collapsed = !self.sidebar_collapsed;
     }
 
     pub fn busy(&self) -> bool {
@@ -413,11 +419,12 @@ impl NeoChat {
     }
 
     fn handle_shortcuts(&mut self, ctx: &Context) {
-        let (new_chat, settings, escape) = ctx.input(|i| {
+        let (new_chat, settings, escape, toggle_sidebar) = ctx.input(|i| {
             (
                 i.key_pressed(egui::Key::N) && i.modifiers.command,
                 i.key_pressed(egui::Key::Comma) && i.modifiers.command,
                 i.key_pressed(egui::Key::Escape),
+                i.key_pressed(egui::Key::B) && i.modifiers.command,
             )
         });
         if new_chat {
@@ -425,6 +432,9 @@ impl NeoChat {
         }
         if settings {
             self.open_settings();
+        }
+        if toggle_sidebar {
+            self.toggle_sidebar();
         }
         if escape && self.busy() {
             self.stop();
@@ -499,6 +509,14 @@ impl NeoChat {
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
+                    if ui
+                        .add(egui::Button::new(egui::RichText::new("☰").size(16.0)))
+                        .on_hover_text("Mostrar/ocultar conversas (Ctrl+B)")
+                        .clicked()
+                    {
+                        self.toggle_sidebar();
+                    }
+                    ui.add_space(6.0);
                     ui.label(
                         egui::RichText::new("NeoChat")
                             .size(18.0)

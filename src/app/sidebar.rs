@@ -14,6 +14,28 @@ enum RowAction {
 pub(super) fn sidebar(app: &mut NeoChat, ui: &mut Ui) {
     let colors = theme::chat_colors(ui.ctx().theme());
 
+    if app.sidebar_collapsed {
+        Panel::left("sidebar")
+            .resizable(false)
+            .exact_size(48.0)
+            .frame(
+                Frame::new()
+                    .fill(colors.surface)
+                    .inner_margin(Margin::symmetric(6, 10)),
+            )
+            .show(ui, |ui| {
+                let expand = Button::new(RichText::new("»").size(18.0)).corner_radius(8);
+                if ui
+                    .add_sized([ui.available_width(), 36.0], expand)
+                    .on_hover_text("Mostrar conversas (Ctrl+B)")
+                    .clicked()
+                {
+                    app.toggle_sidebar();
+                }
+            });
+        return;
+    }
+
     Panel::left("sidebar")
         .resizable(true)
         .default_size(274.0)
@@ -32,20 +54,32 @@ pub(super) fn sidebar(app: &mut NeoChat, ui: &mut Ui) {
                         .inner_margin(Margin::same(0)),
                 )
                 .show(ui, |ui| {
-                    let new_button = Button::new(
-                        RichText::new("+  Nova conversa")
-                            .color(Color32::WHITE)
-                            .strong(),
-                    )
-                    .fill(colors.user_bubble)
-                    .corner_radius(8);
+                    ui.horizontal(|ui| {
+                        let collapse = Button::new(RichText::new("‹").size(16.0)).corner_radius(6);
+                        if ui
+                            .add(collapse)
+                            .on_hover_text("Ocultar conversas (Ctrl+B)")
+                            .clicked()
+                        {
+                            app.toggle_sidebar();
+                        }
+                        ui.add_space(4.0);
 
-                    if ui
-                        .add_sized([ui.available_width(), 36.0], new_button)
-                        .clicked()
-                    {
-                        app.new_conversation();
-                    }
+                        let new_button = Button::new(
+                            RichText::new("+  Nova conversa")
+                                .color(Color32::WHITE)
+                                .strong(),
+                        )
+                        .fill(colors.user_bubble)
+                        .corner_radius(8);
+
+                        if ui
+                            .add_sized([ui.available_width(), 36.0], new_button)
+                            .clicked()
+                        {
+                            app.new_conversation();
+                        }
+                    });
 
                     ui.add_space(10.0);
                     ui.add(Label::new(
@@ -78,13 +112,8 @@ pub(super) fn sidebar(app: &mut NeoChat, ui: &mut Ui) {
 egui::ScrollArea::vertical()
                             .id_salt("conversation_list")
                             .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                let mut collapsed = false;
-                                if ui.button("Toggle Collapse").clicked() {
-                                    collapsed = !collapsed;
-                                }
-                                if !collapsed {
-                            for (id, title, preview, updated) in &rows {
+                             .show(ui, |ui| {
+                             for (id, title, preview, updated) in &rows {
                                 let selected = active.as_deref() == Some(id.as_str());
                                 let response = row(ui, &colors, title, preview, *updated, selected);
                                 if response.clicked() {
@@ -100,10 +129,9 @@ egui::ScrollArea::vertical()
                                         ui.close();
                                     }
                                 });
-                                ui.add_space(2.0);
-                            }
-                        }
-                    });
+                                 ui.add_space(2.0);
+                             }
+                     });
 
                     match action {
                         Some(RowAction::Select(id)) => app.select_conversation(&id),
