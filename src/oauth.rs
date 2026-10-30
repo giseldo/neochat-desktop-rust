@@ -150,26 +150,9 @@ async fn poll_until_completed(client: &reqwest::Client, poll_url: &str) -> Resul
 }
 
 fn open_browser(url: &str) -> Result<()> {
-    // explorer repassa a URL ao navegador padrao sem interpretar `&`
-    // como o cmd /c start faria; isso preserva os query params.
-    #[cfg(windows)]
-    {
-        std::process::Command::new("explorer")
-            .arg(url)
-            .spawn()
-            .context("falha ao abrir o navegador")?;
-    }
-    #[cfg(not(windows))]
-    {
-        for opener in ["xdg-open", "open"] {
-            if std::process::Command::new(opener).arg(url).spawn().is_ok() {
-                return Ok(());
-            }
-        }
-        bail!("nao foi possivel abrir o navegador");
-    }
-    #[cfg(windows)]
-    Ok(())
+    // crate `open`: ShellExecuteW no Windows, sem passar por shell
+    // (evita o cmd corromper o `&` da query).
+    open::that(url).context("falha ao abrir o navegador")
 }
 
 #[cfg(test)]
