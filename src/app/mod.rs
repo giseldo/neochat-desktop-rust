@@ -3,8 +3,7 @@ mod composer;
 mod settings;
 mod sidebar;
 
-use crate::mistral::{Credential, Message, MistralClient};
-use crate::oauth::{OauthTokens, TokenStore};
+use crate::mistral::{Message, MistralClient};
 use crate::storage::{Store, StoredMessage, ThemeChoice};
 use crate::{secrets, theme};
 use eframe::egui;
@@ -44,8 +43,7 @@ pub struct NeoChat {
     pub(super) settings_key: String,
     pub(super) settings_model: String,
     pub(super) settings_theme: ThemeChoice,
-    pub(super) auth: TokenStore,
-    pub(super) login_rx: Option<Receiver<Result<OauthTokens, String>>>,
+    pub(super) login_rx: Option<Receiver<Result<String, String>>>,
     pub(super) login_pending: bool,
     pub(super) login_status: Option<(bool, String)>,
     pub(super) test_rx: Option<Receiver<Result<String, String>>>,
@@ -95,7 +93,6 @@ impl NeoChat {
             settings_key: String::new(),
             settings_model,
             settings_theme,
-            auth: TokenStore::from_disk(),
             login_rx: None,
             login_pending: false,
             login_status: None,
@@ -143,15 +140,7 @@ impl NeoChat {
     }
 
     pub(super) fn has_auth(&self) -> bool {
-        self.auth.get().is_some() || !self.api_key.trim().is_empty()
-    }
-
-    fn credential(&self) -> Credential {
-        if self.auth.get().is_some() {
-            Credential::Oauth(self.auth.clone())
-        } else {
-            Credential::api_key(&self.api_key)
-        }
+        !self.api_key.trim().is_empty()
     }
 
     pub(super) fn start_login(&mut self, ctx: &Context) {
@@ -177,10 +166,16 @@ impl NeoChat {
             return;
         };
         match rx.try_recv() {
-            Ok(Ok(tokens)) => {
+            Ok(Ok(api_key)) => {
                 self.login_pending = false;
-                self.auth.set(tokens);
-                self.login_status = Some((true, "Conectado via navegador.".to_string()));
+                self.api_key = api_key;
+                self.settings_key = self.api_key.clone();
+                if let Err(err) = secrets::save_api_key(&self.api_key) {
+                    self.login_status = Some((false, format!("Falha ao salvar a chave: {err:#}")));
+                } else {
+                    self.login_status =
+                        Some((true, "Login concluido; chave da API salva.".to_string()));
+                }
             }
             Ok(Err(err)) => {
                 self.login_pending = false;
@@ -195,11 +190,6 @@ impl NeoChat {
                     Some((false, "Processo de login encerrado inesperadamente.".to_string()));
             }
         }
-    }
-
-    pub(super) fn logout(&mut self) {
-        self.auth.clear();
-        self.login_status = Some((true, "Sessao encerrada.".to_string()));
     }
 
     fn model_list(&self) -> Vec<String> {
@@ -326,7 +316,7 @@ impl NeoChat {
         let mut history = vec![Message::new("system", SYSTEM_PROMPT)];
         history.extend(conversation.to_api_messages());
 
-        let client = MistralClient::new(self.credential(), self.store.config.model.clone());
+        let client = MistralClient::new(self.api_key.trim().to_string(), self.store.config.model.clone());
         let (tx, rx) = channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_task = Arc::clone(&cancel);
@@ -478,13 +468,10 @@ impl NeoChat {
     }
 
     pub(super) fn start_test(&mut self, ctx: &Context) {
-        // Testa a chave digitada (ainda nao aplicada); sem chave, testa a sessao atual.
-        let credential = if self.settings_key.trim().is_empty() {
-            self.credential()
-        } else {
-            Credential::api_key(&self.settings_key)
-        };
-        let client = MistralClient::new(credential, self.settings_model.clone());
+        let client = MistralClient::new(
+            self.settings_key.trim().to_string(),
+            self.settings_model.clone(),
+        );
         let (tx, rx) = channel();
         let ctx_task = ctx.clone();
         self.test_rx = Some(rx);

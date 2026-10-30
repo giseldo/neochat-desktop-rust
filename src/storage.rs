@@ -16,7 +16,6 @@ pub const APP_DIR: &str = "NeoChat";
 pub const CONFIG_FILE: &str = "config.json";
 pub const CONVERSATIONS_FILE: &str = "conversations.json";
 pub const SECRET_FILE: &str = "secret.dat";
-pub const TOKEN_FILE: &str = "token.dat";
 
 pub fn now() -> i64 {
     SystemTime::now()

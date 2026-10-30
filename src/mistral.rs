@@ -45,35 +45,14 @@ struct Delta {
     content: Option<String>,
 }
 
-/// Credencial usada nas chamadas: chave de API ou sessao OAuth.
-#[derive(Clone)]
-pub enum Credential {
-    ApiKey(String),
-    Oauth(crate::oauth::TokenStore),
-}
-
-impl Credential {
-    pub fn api_key(key: &str) -> Self {
-        Self::ApiKey(key.trim().to_string())
-    }
-
-    fn bearer(&self) -> Option<String> {
-        match self {
-            Self::ApiKey(key) if !key.trim().is_empty() => Some(key.trim().to_string()),
-            Self::ApiKey(_) => None,
-            Self::Oauth(store) => store.get().map(|tokens| tokens.access_token),
-        }
-    }
-}
-
 pub struct MistralClient {
     http: reqwest::Client,
-    credential: Credential,
+    api_key: String,
     pub model: String,
 }
 
 impl MistralClient {
-    pub fn new(credential: Credential, model: String) -> Self {
+    pub fn new(api_key: String, model: String) -> Self {
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(15))
             .timeout(Duration::from_secs(180))
@@ -81,7 +60,7 @@ impl MistralClient {
             .unwrap_or_default();
         Self {
             http,
-            credential,
+            api_key,
             model,
         }
     }
@@ -104,9 +83,9 @@ impl MistralClient {
         cancel: Option<&AtomicBool>,
         mut on_token: impl FnMut(&str),
     ) -> Result<String> {
-        let Some(bearer) = self.credential.bearer() else {
-            bail!("faça login com a conta Mistral ou informe a chave da API nas configurações");
-        };
+        if self.api_key.trim().is_empty() {
+            bail!("informe a chave da API da Mistral nas configuracoes");
+        }
 
         let body = ChatRequest {
             model: &self.model,
@@ -114,12 +93,14 @@ impl MistralClient {
             stream: true,
         };
 
-        let mut resp = self.send_chat(&bearer, &body).await?;
-        if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
-            if let Some(fresh) = self.refreshed_bearer().await {
-                resp = self.send_chat(&fresh, &body).await?;
-            }
-        }
+        let resp = self
+            .http
+            .post(API_URL)
+            .bearer_auth(self.api_key.trim())
+            .json(&body)
+            .send()
+            .await
+            .context("falha ao conectar na API da Mistral")?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -164,52 +145,22 @@ impl MistralClient {
     }
 
     pub async fn test_connection(&self) -> Result<String> {
-        let Some(bearer) = self.credential.bearer() else {
-            bail!("faça login com a conta Mistral ou informe a chave da API");
-        };
-        let mut resp = self.send_models(&bearer).await?;
-        if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
-            if let Some(fresh) = self.refreshed_bearer().await {
-                resp = self.send_models(&fresh).await?;
-            }
+        if self.api_key.trim().is_empty() {
+            bail!("informe a chave da API da Mistral");
         }
+        let resp = self
+            .http
+            .get(MODELS_URL)
+            .bearer_auth(self.api_key.trim())
+            .send()
+            .await
+            .context("falha ao conectar na API da Mistral")?;
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
             bail!("{}", friendly_error(status.as_u16(), &text));
         }
-        Ok("Conexao valida, sessao estabelecida.".to_string())
-    }
-
-    async fn send_chat(&self, bearer: &str, body: &ChatRequest<'_>) -> Result<reqwest::Response> {
-        self.http
-            .post(API_URL)
-            .bearer_auth(bearer)
-            .json(body)
-            .send()
-            .await
-            .context("falha ao conectar na API da Mistral")
-    }
-
-    async fn send_models(&self, bearer: &str) -> Result<reqwest::Response> {
-        self.http
-            .get(MODELS_URL)
-            .bearer_auth(bearer)
-            .send()
-            .await
-            .context("falha ao conectar na API da Mistral")
-    }
-
-    /// Renova o access token OAuth apos um 401 e devolve o novo bearer.
-    async fn refreshed_bearer(&self) -> Option<String> {
-        let Credential::Oauth(store) = &self.credential else {
-            return None;
-        };
-        let tokens = store.get()?;
-        let fresh = crate::oauth::refresh(&tokens).await.ok()?;
-        let bearer = fresh.access_token.clone();
-        store.set(fresh);
-        Some(bearer)
+        Ok("Chave valida, conexao estabelecida.".to_string())
     }
 }
 
@@ -223,7 +174,7 @@ fn friendly_error(status: u16, body: &str) -> String {
     let detail = body.trim();
     let detail: String = detail.chars().take(300).collect();
     match status {
-        401 => "sessao expirada ou credencial invalida (401)".to_string(),
+        401 => "chave da API invalida ou revogada (401)".to_string(),
         403 => "acesso negado pela API da Mistral (403)".to_string(),
         422 => format!("requisicao invalida (422): {detail}"),
         429 => "limite de uso atingido na Mistral (429). Tente novamente em instantes".to_string(),
