@@ -3,20 +3,24 @@ name = "neochat"
 version = "0.1.0"
 edition = "2021"
 description = "Chatbot de desktop para Windows que conversa com um LLM da Mistral"
+default-run = "neochat"
 build = "build.rs"
 
 [dependencies]
 anyhow = "1"
+base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 eframe = "0.37.0"
 egui = "0.37.0"
 egui_commonmark = { version = "0.26", default-features = false }
 futures-util = "0.3"
 image = { version = "0.25", default-features = false, features = ["png"] }
+rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util", "sync"] }
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util", "net", "time", "sync"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Security_Cryptography", "Win32_Foundation"] }

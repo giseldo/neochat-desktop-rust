@@ -50,6 +50,34 @@ pub fn load_api_key() -> Option<String> {
     (!key.is_empty()).then_some(key)
 }
 
+pub fn token_path() -> PathBuf {
+    data_dir().join(crate::storage::TOKEN_FILE)
+}
+
+pub fn save_tokens(tokens: &crate::oauth::OauthTokens) -> Result<()> {
+    let path = token_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_vec(tokens)?;
+    fs::write(path, protect(&json)?)?;
+    Ok(())
+}
+
+pub fn load_tokens() -> Option<crate::oauth::OauthTokens> {
+    let bytes = fs::read(token_path()).ok()?;
+    let plain = unprotect(&bytes).ok()?;
+    serde_json::from_slice(&plain).ok()
+}
+
+pub fn clear_tokens() -> Result<()> {
+    let path = token_path();
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
 #[cfg(windows)]
 mod win {
     use anyhow::{bail, Result};

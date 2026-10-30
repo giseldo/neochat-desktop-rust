@@ -11,8 +11,13 @@ pub(super) fn settings_window(app: &mut NeoChat, ctx: &egui::Context) {
     let mut save = false;
     let mut test = false;
     let mut close = false;
+    let mut login = false;
+    let mut logout = false;
     let pending = app.test_pending;
     let status = app.test_status.clone();
+    let login_pending = app.login_pending;
+    let login_status = app.login_status.clone();
+    let using_oauth = app.auth.get().is_some();
     let models = app.model_list();
 
     Window::new("Configurações")
@@ -34,6 +39,42 @@ pub(super) fn settings_window(app: &mut NeoChat, ctx: &egui::Context) {
                 "Obter uma chave no console da Mistral",
                 "https://console.mistral.ai/api-keys",
             );
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(6.0);
+
+            ui.label(RichText::new("Conta Mistral (OAuth)").strong());
+            ui.horizontal(|ui| {
+                if using_oauth {
+                    ui.label(
+                        RichText::new("Conectado via navegador")
+                            .color(Color32::from_rgb(0x3F, 0xB9, 0x50)),
+                    );
+                    if ui.button("Sair da conta").clicked() {
+                        logout = true;
+                    }
+                } else {
+                    let label = if login_pending {
+                        "Abrindo o navegador..."
+                    } else {
+                        "Entrar com a conta Mistral"
+                    };
+                    if ui
+                        .add_enabled(!login_pending, Button::new(label))
+                        .clicked()
+                    {
+                        login = true;
+                    }
+                }
+            });
+            if let Some((ok, message)) = &login_status {
+                let color = if *ok {
+                    Color32::from_rgb(0x3F, 0xB9, 0x50)
+                } else {
+                    ui.visuals().error_fg_color
+                };
+                ui.label(RichText::new(message).small().color(color));
+            }
             ui.add_space(10.0);
             ui.separator();
             ui.add_space(6.0);
@@ -62,9 +103,11 @@ pub(super) fn settings_window(app: &mut NeoChat, ctx: &egui::Context) {
 
             ui.add_space(6.0);
             ui.label(
-                RichText::new("A chave fica salva criptografada com o Windows (DPAPI).")
-                    .small()
-                    .color(ui.visuals().weak_text_color()),
+                RichText::new(
+                    "A chave e os tokens da sessao ficam salvos criptografados com o Windows (DPAPI).",
+                )
+                .small()
+                .color(ui.visuals().weak_text_color()),
             );
 
             ui.add_space(14.0);
@@ -117,5 +160,11 @@ pub(super) fn settings_window(app: &mut NeoChat, ctx: &egui::Context) {
     }
     if save {
         app.apply_settings();
+    }
+    if login {
+        app.start_login(ctx);
+    }
+    if logout {
+        app.logout();
     }
 }
