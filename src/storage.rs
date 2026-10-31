@@ -43,6 +43,8 @@ impl ThemeChoice {
     }
 }
 
+pub const DEFAULT_TEMPERATURE: f32 = 0.7;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub model: String,
@@ -54,10 +56,18 @@ pub struct Config {
     pub font_scale: f32,
     #[serde(default)]
     pub cached_models: Vec<String>,
+    #[serde(default = "default_temperature")]
+    pub temperature: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
 }
 
 fn default_font_scale() -> f32 {
     1.0
+}
+
+fn default_temperature() -> f32 {
+    DEFAULT_TEMPERATURE
 }
 
 impl Default for Config {
@@ -69,6 +79,8 @@ impl Default for Config {
             window_size: None,
             font_scale: default_font_scale(),
             cached_models: Vec::new(),
+            temperature: default_temperature(),
+            max_tokens: None,
         }
     }
 }
@@ -432,6 +444,8 @@ mod tests {
             window_size: Some([900.0, 700.0]),
             font_scale: 1.2,
             cached_models: vec!["codestral-latest".to_string()],
+            temperature: 0.3,
+            max_tokens: Some(2048),
         };
         let json = serde_json::to_string(&config).unwrap();
         let back: Config = serde_json::from_str(&json).unwrap();
@@ -440,6 +454,8 @@ mod tests {
         assert_eq!(back.window_size, Some([900.0, 700.0]));
         assert_eq!(back.font_scale, 1.2);
         assert_eq!(back.cached_models, vec!["codestral-latest".to_string()]);
+        assert!((back.temperature - 0.3).abs() < 0.001);
+        assert_eq!(back.max_tokens, Some(2048));
     }
 
     #[test]

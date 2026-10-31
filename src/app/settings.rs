@@ -1,6 +1,6 @@
 use super::NeoChat;
-use crate::storage::ThemeChoice;
-use egui::{Align2, Button, Color32, ComboBox, RichText, TextEdit, Window};
+use crate::storage::{ThemeChoice, DEFAULT_TEMPERATURE};
+use egui::{Align2, Button, Color32, ComboBox, RichText, Slider, TextEdit, Window};
 
 pub(super) fn settings_window(app: &mut NeoChat, ctx: &egui::Context) {
     if !app.settings_open {
@@ -79,8 +79,13 @@ pub(super) fn settings_window(app: &mut NeoChat, ctx: &egui::Context) {
                         "Carregar todos os modelos"
                     };
                     if ui
-                        .add_enabled(!models_pending, Button::new(RichText::new(fetch_label).small()))
-                        .on_hover_text("Buscar a lista completa de modelos disponíveis na API da Mistral")
+                        .add_enabled(
+                            !models_pending,
+                            Button::new(RichText::new(fetch_label).small()),
+                        )
+                        .on_hover_text(
+                            "Buscar a lista completa de modelos disponíveis na API da Mistral",
+                        )
                         .clicked()
                     {
                         fetch_models = true;
@@ -113,6 +118,78 @@ pub(super) fn settings_window(app: &mut NeoChat, ctx: &egui::Context) {
             }
 
             ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(6.0);
+
+            let has_custom_params = (app.settings_temperature - DEFAULT_TEMPERATURE).abs() > 0.005
+                || !app.settings_max_tokens.trim().is_empty();
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Parâmetros de geração").strong());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add_enabled(
+                            has_custom_params,
+                            Button::new(RichText::new("Restaurar padrões").small()),
+                        )
+                        .on_hover_text("Voltar para temperatura 0.70 e limite automático de tokens")
+                        .clicked()
+                    {
+                        app.settings_temperature = DEFAULT_TEMPERATURE;
+                        app.settings_max_tokens.clear();
+                    }
+                });
+            });
+
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label("Temperatura:");
+                ui.add(
+                    Slider::new(&mut app.settings_temperature, 0.0..=1.5)
+                        .step_by(0.05)
+                        .fixed_decimals(2),
+                );
+            });
+            ui.label(
+                RichText::new(
+                    "0.00 = determinístico/código · 0.70 = equilibrado · >1.00 = mais criativo",
+                )
+                .small()
+                .color(ui.visuals().weak_text_color()),
+            );
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label("Máximo de tokens:");
+                ui.add(
+                    TextEdit::singleline(&mut app.settings_max_tokens)
+                        .desired_width(145.0)
+                        .hint_text("Automático"),
+                );
+                app.settings_max_tokens.retain(|c| c.is_ascii_digit());
+
+                for preset in ["512", "2048", "4096"] {
+                    if ui
+                        .small_button(preset)
+                        .on_hover_text(format!("Limitar resposta a {preset} tokens"))
+                        .clicked()
+                    {
+                        app.settings_max_tokens = preset.to_string();
+                    }
+                }
+                if !app.settings_max_tokens.is_empty()
+                    && ui
+                        .small_button("Auto")
+                        .on_hover_text("Sem limite fixo (usa o padrão do modelo)")
+                        .clicked()
+                {
+                    app.settings_max_tokens.clear();
+                }
+            });
+
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(6.0);
+
             ui.label(RichText::new("Tema").strong());
             ui.horizontal(|ui| {
                 for choice in [
@@ -126,11 +203,9 @@ pub(super) fn settings_window(app: &mut NeoChat, ctx: &egui::Context) {
 
             ui.add_space(6.0);
             ui.label(
-                RichText::new(
-                    "A chave fica salva criptografada com o Windows (DPAPI).",
-                )
-                .small()
-                .color(ui.visuals().weak_text_color()),
+                RichText::new("A chave fica salva criptografada com o Windows (DPAPI).")
+                    .small()
+                    .color(ui.visuals().weak_text_color()),
             );
 
             ui.add_space(14.0);

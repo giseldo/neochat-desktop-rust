@@ -27,6 +27,10 @@ struct ChatRequest<'a> {
     model: &'a str,
     messages: &'a [Message],
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,6 +83,8 @@ pub struct MistralClient {
     http: reqwest::Client,
     api_key: String,
     pub model: String,
+    pub temperature: Option<f32>,
+    pub max_tokens: Option<u32>,
 }
 
 impl MistralClient {
@@ -92,7 +98,15 @@ impl MistralClient {
             http,
             api_key,
             model,
+            temperature: None,
+            max_tokens: None,
         }
+    }
+
+    pub fn with_params(mut self, temperature: Option<f32>, max_tokens: Option<u32>) -> Self {
+        self.temperature = temperature.map(|t| t.clamp(0.0, 1.5));
+        self.max_tokens = max_tokens.filter(|&m| m > 0);
+        self
     }
 
     /// Envia o histórico, chama `on_token` a cada pedaço de texto recebido
@@ -124,6 +138,10 @@ impl MistralClient {
             model: &self.model,
             messages,
             stream: true,
+            temperature: self
+                .temperature
+                .map(|t| ((t as f64) * 100.0).round() / 100.0),
+            max_tokens: self.max_tokens.filter(|&m| m > 0),
         };
 
         let resp = self
@@ -281,5 +299,31 @@ mod tests {
                 total_tokens: 110,
             })
         );
+    }
+
+    #[test]
+    fn chat_request_serializes_generation_params() {
+        let msgs = vec![Message::new("user", "teste")];
+        let req = ChatRequest {
+            model: "mistral-small-latest",
+            messages: &msgs,
+            stream: true,
+            temperature: Some(0.3),
+            max_tokens: Some(1024),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""temperature":0.3"#));
+        assert!(json.contains(r#""max_tokens":1024"#));
+
+        let req_default = ChatRequest {
+            model: "mistral-small-latest",
+            messages: &msgs,
+            stream: true,
+            temperature: None,
+            max_tokens: None,
+        };
+        let json_default = serde_json::to_string(&req_default).unwrap();
+        assert!(!json_default.contains("temperature"));
+        assert!(!json_default.contains("max_tokens"));
     }
 }

@@ -39,6 +39,8 @@ pub struct NeoChat {
     pub(super) settings_key: String,
     pub(super) settings_model: String,
     pub(super) settings_theme: ThemeChoice,
+    pub(super) settings_temperature: f32,
+    pub(super) settings_max_tokens: String,
     pub(super) login_rx: Option<Receiver<Result<String, String>>>,
     pub(super) login_pending: bool,
     pub(super) login_status: Option<(bool, String)>,
@@ -101,6 +103,12 @@ impl NeoChat {
 
         let settings_model = store.config.model.clone();
         let settings_theme = store.config.theme;
+        let settings_temperature = store.config.temperature;
+        let settings_max_tokens = store
+            .config
+            .max_tokens
+            .map(|m| m.to_string())
+            .unwrap_or_default();
 
         let mut app = Self {
             rt: tokio::runtime::Runtime::new().expect("falha ao criar o runtime tokio"),
@@ -118,6 +126,8 @@ impl NeoChat {
             settings_key: String::new(),
             settings_model,
             settings_theme,
+            settings_temperature,
+            settings_max_tokens,
             login_rx: None,
             login_pending: false,
             login_status: None,
@@ -257,6 +267,13 @@ impl NeoChat {
         self.settings_key = self.api_key.clone();
         self.settings_model = self.store.config.model.clone();
         self.settings_theme = self.store.config.theme;
+        self.settings_temperature = self.store.config.temperature;
+        self.settings_max_tokens = self
+            .store
+            .config
+            .max_tokens
+            .map(|m| m.to_string())
+            .unwrap_or_default();
         self.test_status = None;
         self.models_status = None;
         self.settings_open = true;
@@ -392,7 +409,14 @@ impl NeoChat {
         let mut history = vec![Message::new("system", SYSTEM_PROMPT)];
         history.extend(conversation.to_api_messages());
 
-        let client = MistralClient::new(self.api_key.trim().to_string(), self.store.config.model.clone());
+        let client = MistralClient::new(
+            self.api_key.trim().to_string(),
+            self.store.config.model.clone(),
+        )
+        .with_params(
+            Some(self.store.config.temperature),
+            self.store.config.max_tokens,
+        );
         let (tx, rx) = channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_task = Arc::clone(&cancel);
@@ -639,6 +663,14 @@ impl NeoChat {
         }
         self.store.config.model = self.settings_model.clone();
         self.store.config.theme = self.settings_theme;
+        self.store.config.temperature =
+            ((self.settings_temperature.clamp(0.0, 1.5) * 100.0).round()) / 100.0;
+        self.store.config.max_tokens = self
+            .settings_max_tokens
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|&m| m > 0);
         self.store.save();
         self.settings_open = false;
         self.status = Some("Configurações salvas.".to_string());

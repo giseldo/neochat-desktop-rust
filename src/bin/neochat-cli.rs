@@ -33,7 +33,8 @@ async fn main() -> Result<()> {
         .filter(|model| !model.is_empty())
         .unwrap_or_else(|| store.config.model.clone());
 
-    let client = MistralClient::new(api_key, model);
+    let client = MistralClient::new(api_key, model)
+        .with_params(Some(store.config.temperature), store.config.max_tokens);
     let mut history = vec![Message::new("system", SYSTEM_PROMPT)];
 
     println!("NeoChat — modelo: {}", client.model);
