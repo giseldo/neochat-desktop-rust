@@ -31,6 +31,14 @@ struct ChatRequest<'a> {
     temperature: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_cache_key: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptTokensDetails {
+    #[serde(default)]
+    pub cached_tokens: u32,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,6 +49,16 @@ pub struct TokenUsage {
     pub completion_tokens: u32,
     #[serde(default)]
     pub total_tokens: u32,
+    #[serde(default)]
+    pub prompt_tokens_details: Option<PromptTokensDetails>,
+}
+
+impl TokenUsage {
+    pub fn cached_tokens(&self) -> u32 {
+        self.prompt_tokens_details
+            .map(|d| d.cached_tokens)
+            .unwrap_or(0)
+    }
 }
 
 #[derive(Deserialize)]
@@ -85,6 +103,7 @@ pub struct MistralClient {
     pub model: String,
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
+    pub prompt_cache_key: Option<String>,
 }
 
 impl MistralClient {
@@ -100,12 +119,20 @@ impl MistralClient {
             model,
             temperature: None,
             max_tokens: None,
+            prompt_cache_key: None,
         }
     }
 
     pub fn with_params(mut self, temperature: Option<f32>, max_tokens: Option<u32>) -> Self {
         self.temperature = temperature.map(|t| t.clamp(0.0, 1.5));
         self.max_tokens = max_tokens.filter(|&m| m > 0);
+        self
+    }
+
+    pub fn with_prompt_cache_key(mut self, cache_key: Option<String>) -> Self {
+        self.prompt_cache_key = cache_key
+            .map(|k| k.trim().to_string())
+            .filter(|k| !k.is_empty());
         self
     }
 
@@ -142,6 +169,7 @@ impl MistralClient {
                 .temperature
                 .map(|t| ((t as f64) * 100.0).round() / 100.0),
             max_tokens: self.max_tokens.filter(|&m| m > 0),
+            prompt_cache_key: self.prompt_cache_key.as_deref(),
         };
 
         let resp = self
@@ -289,7 +317,7 @@ mod tests {
 
     #[test]
     fn stream_chunk_parses_usage() {
-        let raw = r#"{"choices":[{"delta":{"content":""}}],"usage":{"prompt_tokens":24,"completion_tokens":86,"total_tokens":110}}"#;
+        let raw = r#"{"choices":[{"delta":{"content":""}}],"usage":{"prompt_tokens":24,"completion_tokens":86,"total_tokens":110,"prompt_tokens_details":{"cached_tokens":16}}}"#;
         let parsed: StreamChunk = serde_json::from_str(raw).unwrap();
         assert_eq!(
             parsed.usage,
@@ -297,8 +325,10 @@ mod tests {
                 prompt_tokens: 24,
                 completion_tokens: 86,
                 total_tokens: 110,
+                prompt_tokens_details: Some(PromptTokensDetails { cached_tokens: 16 }),
             })
         );
+        assert_eq!(parsed.usage.unwrap().cached_tokens(), 16);
     }
 
     #[test]
@@ -310,10 +340,12 @@ mod tests {
             stream: true,
             temperature: Some(0.3),
             max_tokens: Some(1024),
+            prompt_cache_key: Some("conv-123"),
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""temperature":0.3"#));
         assert!(json.contains(r#""max_tokens":1024"#));
+        assert!(json.contains(r#""prompt_cache_key":"conv-123""#));
 
         let req_default = ChatRequest {
             model: "mistral-small-latest",
@@ -321,9 +353,11 @@ mod tests {
             stream: true,
             temperature: None,
             max_tokens: None,
+            prompt_cache_key: None,
         };
         let json_default = serde_json::to_string(&req_default).unwrap();
         assert!(!json_default.contains("temperature"));
         assert!(!json_default.contains("max_tokens"));
+        assert!(!json_default.contains("prompt_cache_key"));
     }
 }

@@ -122,7 +122,8 @@ pub(super) fn settings_window(app: &mut NeoChat, ctx: &egui::Context) {
             ui.add_space(6.0);
 
             let has_custom_params = (app.settings_temperature - DEFAULT_TEMPERATURE).abs() > 0.005
-                || !app.settings_max_tokens.trim().is_empty();
+                || !app.settings_max_tokens.trim().is_empty()
+                || !app.settings_prompt_caching;
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Parâmetros de geração").strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -131,11 +132,12 @@ pub(super) fn settings_window(app: &mut NeoChat, ctx: &egui::Context) {
                             has_custom_params,
                             Button::new(RichText::new("Restaurar padrões").small()),
                         )
-                        .on_hover_text("Voltar para temperatura 0.70 e limite automático de tokens")
+                        .on_hover_text("Voltar para temperatura 0.70, limite automático e cache ativado")
                         .clicked()
                     {
                         app.settings_temperature = DEFAULT_TEMPERATURE;
                         app.settings_max_tokens.clear();
+                        app.settings_prompt_caching = true;
                     }
                 });
             });
@@ -185,6 +187,22 @@ pub(super) fn settings_window(app: &mut NeoChat, ctx: &egui::Context) {
                     app.settings_max_tokens.clear();
                 }
             });
+
+            ui.add_space(6.0);
+            ui.checkbox(
+                &mut app.settings_prompt_caching,
+                "Prompt Caching (reduz custos e latência)",
+            )
+            .on_hover_text(
+                "Envia chave de sessão à Mistral para reaproveitar contexto e obter até 90% de desconto nos tokens de entrada em cache.",
+            );
+            ui.label(
+                RichText::new(
+                    "Desconto de 90% em tokens já processados no histórico da conversa (blocos a partir de 64 tokens).",
+                )
+                .small()
+                .color(ui.visuals().weak_text_color()),
+            );
 
             ui.add_space(10.0);
             ui.separator();

@@ -60,6 +60,8 @@ pub struct Config {
     pub temperature: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    #[serde(default = "default_prompt_caching")]
+    pub prompt_caching: bool,
 }
 
 fn default_font_scale() -> f32 {
@@ -68,6 +70,10 @@ fn default_font_scale() -> f32 {
 
 fn default_temperature() -> f32 {
     DEFAULT_TEMPERATURE
+}
+
+fn default_prompt_caching() -> bool {
+    true
 }
 
 impl Default for Config {
@@ -81,6 +87,7 @@ impl Default for Config {
             cached_models: Vec::new(),
             temperature: default_temperature(),
             max_tokens: None,
+            prompt_caching: default_prompt_caching(),
         }
     }
 }
@@ -101,6 +108,8 @@ pub struct StoredMessage {
     pub completion_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_tokens: Option<u32>,
 }
 
 impl StoredMessage {
@@ -114,6 +123,7 @@ impl StoredMessage {
             prompt_tokens: None,
             completion_tokens: None,
             total_tokens: None,
+            cached_tokens: None,
         }
     }
 
@@ -140,6 +150,10 @@ impl StoredMessage {
             }
         }
 
+        if let Some(cached) = self.cached_tokens.filter(|&c| c > 0) {
+            parts.push(format!("{cached} em cache"));
+        }
+
         if let Some(ms) = self.duration_ms.filter(|&ms| ms > 0) {
             parts.push(format_duration_ms(ms));
             if let Some(tokens) = self.completion_tokens.filter(|&t| t > 0) {
@@ -160,7 +174,12 @@ impl StoredMessage {
     pub fn metrics_tooltip(&self) -> Option<String> {
         let mut lines = Vec::new();
         if let Some(p) = self.prompt_tokens.filter(|&t| t > 0) {
-            lines.push(format!("Prompt: {p} tokens"));
+            if let Some(c) = self.cached_tokens.filter(|&c| c > 0) {
+                let pct = (c as f64 / p as f64 * 100.0).round() as u32;
+                lines.push(format!("Prompt: {p} tokens ({c} em cache · {pct}%)"));
+            } else {
+                lines.push(format!("Prompt: {p} tokens"));
+            }
         }
         if let Some(c) = self.completion_tokens.filter(|&t| t > 0) {
             lines.push(format!("Resposta: {c} tokens"));
@@ -446,6 +465,7 @@ mod tests {
             cached_models: vec!["codestral-latest".to_string()],
             temperature: 0.3,
             max_tokens: Some(2048),
+            prompt_caching: true,
         };
         let json = serde_json::to_string(&config).unwrap();
         let back: Config = serde_json::from_str(&json).unwrap();
@@ -456,6 +476,7 @@ mod tests {
         assert_eq!(back.cached_models, vec!["codestral-latest".to_string()]);
         assert!((back.temperature - 0.3).abs() < 0.001);
         assert_eq!(back.max_tokens, Some(2048));
+        assert!(back.prompt_caching);
     }
 
     #[test]
@@ -528,19 +549,20 @@ mod tests {
         let mut msg = StoredMessage::new("assistant", "resposta");
         assert!(msg.metrics_summary().is_none());
 
-        msg.prompt_tokens = Some(20);
+        msg.prompt_tokens = Some(100);
+        msg.cached_tokens = Some(64);
         msg.completion_tokens = Some(50);
-        msg.total_tokens = Some(70);
+        msg.total_tokens = Some(150);
         msg.duration_ms = Some(2000);
 
         assert_eq!(
             msg.metrics_summary().as_deref(),
-            Some("50 tokens · 2,0s · 25,0 tok/s")
+            Some("50 tokens · 64 em cache · 2,0s · 25,0 tok/s")
         );
         let tooltip = msg.metrics_tooltip().unwrap();
-        assert!(tooltip.contains("Prompt: 20 tokens"));
+        assert!(tooltip.contains("Prompt: 100 tokens (64 em cache · 64%)"));
         assert!(tooltip.contains("Resposta: 50 tokens"));
-        assert!(tooltip.contains("Total: 70 tokens"));
+        assert!(tooltip.contains("Total: 150 tokens"));
         assert!(tooltip.contains("2,00s"));
     }
 }

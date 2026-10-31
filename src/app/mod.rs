@@ -41,6 +41,7 @@ pub struct NeoChat {
     pub(super) settings_theme: ThemeChoice,
     pub(super) settings_temperature: f32,
     pub(super) settings_max_tokens: String,
+    pub(super) settings_prompt_caching: bool,
     pub(super) login_rx: Option<Receiver<Result<String, String>>>,
     pub(super) login_pending: bool,
     pub(super) login_status: Option<(bool, String)>,
@@ -109,6 +110,7 @@ impl NeoChat {
             .max_tokens
             .map(|m| m.to_string())
             .unwrap_or_default();
+        let settings_prompt_caching = store.config.prompt_caching;
 
         let mut app = Self {
             rt: tokio::runtime::Runtime::new().expect("falha ao criar o runtime tokio"),
@@ -128,6 +130,7 @@ impl NeoChat {
             settings_theme,
             settings_temperature,
             settings_max_tokens,
+            settings_prompt_caching,
             login_rx: None,
             login_pending: false,
             login_status: None,
@@ -274,6 +277,7 @@ impl NeoChat {
             .max_tokens
             .map(|m| m.to_string())
             .unwrap_or_default();
+        self.settings_prompt_caching = self.store.config.prompt_caching;
         self.test_status = None;
         self.models_status = None;
         self.settings_open = true;
@@ -357,6 +361,8 @@ impl NeoChat {
                     .then_some(u.completion_tokens)
                     .or(fallback_tokens);
                 message.total_tokens = (u.total_tokens > 0).then_some(u.total_tokens);
+                let cached = u.cached_tokens();
+                message.cached_tokens = (cached > 0).then_some(cached);
             } else {
                 message.completion_tokens = fallback_tokens;
             }
@@ -409,6 +415,12 @@ impl NeoChat {
         let mut history = vec![Message::new("system", SYSTEM_PROMPT)];
         history.extend(conversation.to_api_messages());
 
+        let cache_key = if self.store.config.prompt_caching {
+            Some(conversation.id.clone())
+        } else {
+            None
+        };
+
         let client = MistralClient::new(
             self.api_key.trim().to_string(),
             self.store.config.model.clone(),
@@ -416,7 +428,8 @@ impl NeoChat {
         .with_params(
             Some(self.store.config.temperature),
             self.store.config.max_tokens,
-        );
+        )
+        .with_prompt_cache_key(cache_key);
         let (tx, rx) = channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_task = Arc::clone(&cancel);
@@ -671,6 +684,7 @@ impl NeoChat {
             .parse::<u32>()
             .ok()
             .filter(|&m| m > 0);
+        self.store.config.prompt_caching = self.settings_prompt_caching;
         self.store.save();
         self.settings_open = false;
         self.status = Some("Configurações salvas.".to_string());
