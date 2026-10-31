@@ -10,10 +10,13 @@ pub(super) fn settings_window(app: &mut NeoChat, ctx: &egui::Context) {
     let mut open = true;
     let mut save = false;
     let mut test = false;
+    let mut fetch_models = false;
     let mut close = false;
     let mut login = false;
     let pending = app.test_pending;
     let status = app.test_status.clone();
+    let models_pending = app.models_pending;
+    let models_status = app.models_status.clone();
     let login_pending = app.login_pending;
     let login_status = app.login_status.clone();
     let models = app.model_list();
@@ -67,7 +70,23 @@ pub(super) fn settings_window(app: &mut NeoChat, ctx: &egui::Context) {
             ui.separator();
             ui.add_space(6.0);
 
-            ui.label(RichText::new("Modelo").strong());
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Modelo").strong());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let fetch_label = if models_pending {
+                        "Carregando..."
+                    } else {
+                        "Carregar todos os modelos"
+                    };
+                    if ui
+                        .add_enabled(!models_pending, Button::new(RichText::new(fetch_label).small()))
+                        .on_hover_text("Buscar a lista completa de modelos disponíveis na API da Mistral")
+                        .clicked()
+                    {
+                        fetch_models = true;
+                    }
+                });
+            });
             ComboBox::from_id_salt("settings_model")
                 .width(455.0)
                 .selected_text(app.settings_model.clone())
@@ -76,6 +95,14 @@ pub(super) fn settings_window(app: &mut NeoChat, ctx: &egui::Context) {
                         ui.selectable_value(&mut app.settings_model, model.clone(), model);
                     }
                 });
+            if let Some((ok, message)) = &models_status {
+                let color = if *ok {
+                    Color32::from_rgb(0x3F, 0xB9, 0x50)
+                } else {
+                    ui.visuals().error_fg_color
+                };
+                ui.label(RichText::new(message).small().color(color));
+            }
 
             ui.add_space(10.0);
             ui.label(RichText::new("Tema").strong());
@@ -145,6 +172,9 @@ pub(super) fn settings_window(app: &mut NeoChat, ctx: &egui::Context) {
     app.settings_open = open && !close;
     if test {
         app.start_test(ctx);
+    }
+    if fetch_models {
+        app.start_fetch_models(ctx);
     }
     if save {
         app.apply_settings();

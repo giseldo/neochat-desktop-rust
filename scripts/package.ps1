@@ -22,6 +22,9 @@ try {
     $dist = Join-Path $root "dist"
     New-Item -ItemType Directory -Path $dist -Force | Out-Null
 
+    Get-Process -Name "NeoChat" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 300
+
     Copy-Item -LiteralPath $exe -Destination (Join-Path $dist "NeoChat.exe") -Force
     Copy-Item -LiteralPath (Join-Path $root "README.md") -Destination (Join-Path $dist "README.md") -Force
 

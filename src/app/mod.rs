@@ -43,6 +43,9 @@ pub struct NeoChat {
     pub(super) test_rx: Option<Receiver<Result<String, String>>>,
     pub(super) test_pending: bool,
     pub(super) test_status: Option<(bool, String)>,
+    pub(super) models_rx: Option<Receiver<Result<Vec<String>, String>>>,
+    pub(super) models_pending: bool,
+    pub(super) models_status: Option<(bool, String)>,
     pub(super) rename: Option<(String, String)>,
     pub(super) rename_focus: bool,
     pub(super) delete: Option<String>,
@@ -117,6 +120,9 @@ impl NeoChat {
             test_rx: None,
             test_pending: false,
             test_status: None,
+            models_rx: None,
+            models_pending: false,
+            models_status: None,
             rename: None,
             rename_focus: false,
             delete: None,
@@ -212,11 +218,26 @@ impl NeoChat {
     }
 
     fn model_list(&self) -> Vec<String> {
-        let mut models: Vec<String> = crate::storage::MODELS
-            .iter()
-            .map(|m| m.to_string())
-            .collect();
-        if !models.contains(&self.store.config.model) {
+        let mut models: Vec<String> = if self.store.config.cached_models.is_empty() {
+            crate::storage::MODELS
+                .iter()
+                .map(|m| m.to_string())
+                .collect()
+        } else {
+            let mut list = self.store.config.cached_models.clone();
+            for default_m in crate::storage::MODELS {
+                let s = default_m.to_string();
+                if !list.contains(&s) {
+                    list.push(s);
+                }
+            }
+            list.sort();
+            list
+        };
+        if !self.settings_model.trim().is_empty() && !models.contains(&self.settings_model) {
+            models.insert(0, self.settings_model.clone());
+        }
+        if !self.store.config.model.trim().is_empty() && !models.contains(&self.store.config.model) {
             models.insert(0, self.store.config.model.clone());
         }
         models
@@ -237,6 +258,7 @@ impl NeoChat {
         self.settings_model = self.store.config.model.clone();
         self.settings_theme = self.store.config.theme;
         self.test_status = None;
+        self.models_status = None;
         self.settings_open = true;
     }
 
@@ -523,6 +545,60 @@ impl NeoChat {
         });
     }
 
+    pub(super) fn start_fetch_models(&mut self, ctx: &Context) {
+        if self.models_pending {
+            return;
+        }
+        let key = if self.settings_open && !self.settings_key.trim().is_empty() {
+            self.settings_key.trim().to_string()
+        } else {
+            self.api_key.trim().to_string()
+        };
+        let client = MistralClient::new(key, self.settings_model.clone());
+        let (tx, rx) = channel();
+        let ctx_task = ctx.clone();
+        self.models_rx = Some(rx);
+        self.models_pending = true;
+        self.models_status = None;
+        self.rt.spawn(async move {
+            let result = client
+                .list_models()
+                .await
+                .map_err(|err| format!("{err:#}"));
+            tx.send(result).ok();
+            ctx_task.request_repaint();
+        });
+    }
+
+    pub(super) fn poll_models(&mut self) {
+        let Some(rx) = self.models_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(models)) => {
+                self.models_pending = false;
+                let count = models.len();
+                self.store.config.cached_models = models;
+                self.store.save();
+                self.models_status = Some((
+                    true,
+                    format!("{count} modelos carregados da API da Mistral."),
+                ));
+            }
+            Ok(Err(err)) => {
+                self.models_pending = false;
+                self.models_status = Some((false, err));
+            }
+            Err(TryRecvError::Empty) => {
+                self.models_rx = Some(rx);
+            }
+            Err(TryRecvError::Disconnected) => {
+                self.models_pending = false;
+                self.models_status = Some((false, "Falha ao carregar modelos.".to_string()));
+            }
+        }
+    }
+
     pub(super) fn apply_settings(&mut self) {
         self.api_key = self.settings_key.trim().to_string();
         if let Err(err) = secrets::save_api_key(&self.api_key) {
@@ -777,8 +853,10 @@ impl NeoChat {
 
                         let models = self.model_list();
                         let mut selected = self.store.config.model.clone();
+                        let mut fetch_from_combo = false;
+                        let models_pending = self.models_pending;
                         egui::ComboBox::from_id_salt("model_combo")
-                            .width(175.0)
+                            .width(195.0)
                             .selected_text(
                                 egui::RichText::new(selected.clone())
                                     .size(12.5)
@@ -788,10 +866,23 @@ impl NeoChat {
                                 for model in &models {
                                     ui.selectable_value(&mut selected, model.clone(), model);
                                 }
+                                ui.separator();
+                                let label = if models_pending {
+                                    "Carregando modelos..."
+                                } else {
+                                    "Carregar todos os modelos"
+                                };
+                                if ui.add_enabled(!models_pending, egui::Button::new(label)).clicked() {
+                                    fetch_from_combo = true;
+                                }
                             });
                         if selected != self.store.config.model {
                             self.store.config.model = selected;
                             self.store.save();
+                        }
+                        if fetch_from_combo {
+                            let ctx_clone = ui.ctx().clone();
+                            self.start_fetch_models(&ctx_clone);
                         }
                     });
                 });
@@ -823,6 +914,7 @@ impl eframe::App for NeoChat {
         self.handle_shortcuts(&ctx);
         self.poll_events();
         self.poll_test();
+        self.poll_models();
         self.poll_login();
 
         sidebar::sidebar(self, ui);

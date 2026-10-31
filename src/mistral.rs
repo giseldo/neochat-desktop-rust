@@ -45,6 +45,24 @@ struct Delta {
     content: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct ModelsResponse {
+    #[serde(default)]
+    data: Vec<ModelEntry>,
+}
+
+#[derive(Deserialize)]
+struct ModelEntry {
+    id: String,
+    #[serde(default)]
+    capabilities: Option<ModelCapabilities>,
+}
+
+#[derive(Deserialize)]
+struct ModelCapabilities {
+    completion_chat: Option<bool>,
+}
+
 pub struct MistralClient {
     http: reqwest::Client,
     api_key: String,
@@ -145,6 +163,14 @@ impl MistralClient {
     }
 
     pub async fn test_connection(&self) -> Result<String> {
+        let models = self.list_models().await?;
+        Ok(format!(
+            "Chave valida, conexao estabelecida ({} modelos disponiveis).",
+            models.len()
+        ))
+    }
+
+    pub async fn list_models(&self) -> Result<Vec<String>> {
         if self.api_key.trim().is_empty() {
             bail!("informe a chave da API da Mistral");
         }
@@ -160,7 +186,25 @@ impl MistralClient {
             let text = resp.text().await.unwrap_or_default();
             bail!("{}", friendly_error(status.as_u16(), &text));
         }
-        Ok("Chave valida, conexao estabelecida.".to_string())
+        let parsed: ModelsResponse = resp
+            .json()
+            .await
+            .context("falha ao interpretar a lista de modelos da Mistral")?;
+        let mut ids: Vec<String> = parsed
+            .data
+            .into_iter()
+            .filter(|m| {
+                m.capabilities
+                    .as_ref()
+                    .and_then(|c| c.completion_chat)
+                    .unwrap_or(true)
+            })
+            .map(|m| m.id.trim().to_string())
+            .filter(|id| !id.is_empty())
+            .collect();
+        ids.sort();
+        ids.dedup();
+        Ok(ids)
     }
 }
 

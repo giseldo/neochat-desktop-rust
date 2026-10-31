@@ -52,6 +52,8 @@ pub struct Config {
     pub window_size: Option<[f32; 2]>,
     #[serde(default = "default_font_scale")]
     pub font_scale: f32,
+    #[serde(default)]
+    pub cached_models: Vec<String>,
 }
 
 fn default_font_scale() -> f32 {
@@ -66,6 +68,7 @@ impl Default for Config {
             theme: ThemeChoice::Sistema,
             window_size: None,
             font_scale: default_font_scale(),
+            cached_models: Vec::new(),
         }
     }
 }
@@ -350,6 +353,7 @@ mod tests {
             theme: ThemeChoice::Escuro,
             window_size: Some([900.0, 700.0]),
             font_scale: 1.2,
+            cached_models: vec!["codestral-latest".to_string()],
         };
         let json = serde_json::to_string(&config).unwrap();
         let back: Config = serde_json::from_str(&json).unwrap();
@@ -357,6 +361,7 @@ mod tests {
         assert_eq!(back.theme, ThemeChoice::Escuro);
         assert_eq!(back.window_size, Some([900.0, 700.0]));
         assert_eq!(back.font_scale, 1.2);
+        assert_eq!(back.cached_models, vec!["codestral-latest".to_string()]);
     }
 
     #[test]
