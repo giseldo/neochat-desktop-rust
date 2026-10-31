@@ -86,8 +86,15 @@ fn tune(style: &mut egui::Style, dark: bool) {
     style.spacing.menu_margin = Margin::same(8);
     style.spacing.interact_size.y = 30.0;
     style.spacing.combo_width = 170.0;
+    style.spacing.combo_height = 420.0;
     style.spacing.scroll.bar_width = 6.0;
-    style.spacing.scroll.floating = true;
+    style.spacing.scroll.floating = false;
+    style.spacing.scroll.dormant_background_opacity = 0.15;
+    style.spacing.scroll.active_background_opacity = 0.3;
+    style.spacing.scroll.interact_background_opacity = 0.45;
+    style.spacing.scroll.dormant_handle_opacity = 0.55;
+    style.spacing.scroll.active_handle_opacity = 0.8;
+    style.spacing.scroll.interact_handle_opacity = 1.0;
     style.animation_time = 0.14;
     style.text_styles = BTreeMap::from([
         (

@@ -100,7 +100,7 @@ impl NeoChat {
         let settings_model = store.config.model.clone();
         let settings_theme = store.config.theme;
 
-        Self {
+        let mut app = Self {
             rt: tokio::runtime::Runtime::new().expect("falha ao criar o runtime tokio"),
             store,
             api_key,
@@ -136,7 +136,11 @@ impl NeoChat {
             focus_composer: false,
             sidebar_collapsed: false,
             copied_feedback: None,
+        };
+        if app.has_auth() && app.store.config.cached_models.is_empty() {
+            app.start_fetch_models(&cc.egui_ctx);
         }
+        app
     }
 
     pub(super) fn toggle_sidebar(&mut self) {
@@ -217,22 +221,14 @@ impl NeoChat {
         }
     }
 
-    fn model_list(&self) -> Vec<String> {
+    pub(super) fn model_list(&self) -> Vec<String> {
         let mut models: Vec<String> = if self.store.config.cached_models.is_empty() {
             crate::storage::MODELS
                 .iter()
                 .map(|m| m.to_string())
                 .collect()
         } else {
-            let mut list = self.store.config.cached_models.clone();
-            for default_m in crate::storage::MODELS {
-                let s = default_m.to_string();
-                if !list.contains(&s) {
-                    list.push(s);
-                }
-            }
-            list.sort();
-            list
+            self.store.config.cached_models.clone()
         };
         if !self.settings_model.trim().is_empty() && !models.contains(&self.settings_model) {
             models.insert(0, self.settings_model.clone());
@@ -856,13 +852,16 @@ impl NeoChat {
                         let mut fetch_from_combo = false;
                         let models_pending = self.models_pending;
                         egui::ComboBox::from_id_salt("model_combo")
-                            .width(195.0)
+                            .width(220.0)
+                            .height(420.0)
                             .selected_text(
                                 egui::RichText::new(selected.clone())
                                     .size(12.5)
                                     .color(colors.muted),
                             )
                             .show_ui(ui, |ui| {
+                                ui.spacing_mut().item_spacing.y = 2.0;
+                                ui.spacing_mut().interact_size.y = 24.0;
                                 for model in &models {
                                     ui.selectable_value(&mut selected, model.clone(), model);
                                 }
@@ -877,7 +876,8 @@ impl NeoChat {
                                 }
                             });
                         if selected != self.store.config.model {
-                            self.store.config.model = selected;
+                            self.store.config.model = selected.clone();
+                            self.settings_model = selected;
                             self.store.save();
                         }
                         if fetch_from_combo {

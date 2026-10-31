@@ -87,14 +87,22 @@ pub(super) fn settings_window(app: &mut NeoChat, ctx: &egui::Context) {
                     }
                 });
             });
+            let prev_model = app.settings_model.clone();
             ComboBox::from_id_salt("settings_model")
                 .width(455.0)
+                .height(360.0)
                 .selected_text(app.settings_model.clone())
                 .show_ui(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.spacing_mut().interact_size.y = 24.0;
                     for model in &models {
                         ui.selectable_value(&mut app.settings_model, model.clone(), model);
                     }
                 });
+            if app.settings_model != prev_model {
+                app.store.config.model = app.settings_model.clone();
+                app.store.save();
+            }
             if let Some((ok, message)) = &models_status {
                 let color = if *ok {
                     Color32::from_rgb(0x3F, 0xB9, 0x50)
