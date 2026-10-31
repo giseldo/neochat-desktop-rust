@@ -128,9 +128,14 @@ impl Conversation {
         self.messages
             .iter()
             .filter(|m| m.is_user())
-            .map(|m| m.content.trim())
-            .find(|text| !text.is_empty())
-            .map(|text| truncate_chars(text, 42))
+            .filter_map(|m| {
+                m.content
+                    .lines()
+                    .map(strip_markdown)
+                    .find(|line| !line.is_empty())
+            })
+            .next()
+            .map(|text| truncate_chars(&text, 42))
     }
 
     pub fn ensure_title(&mut self) {
@@ -145,8 +150,17 @@ impl Conversation {
         let Some(last) = self.messages.last() else {
             return "Sem mensagens".to_string();
         };
-        let first_line = last.content.lines().next().unwrap_or("").trim();
-        truncate_chars(first_line, 60)
+        let cleaned = last
+            .content
+            .lines()
+            .map(strip_markdown)
+            .find(|line| !line.is_empty())
+            .unwrap_or_default();
+        if cleaned.is_empty() {
+            "Sem mensagens".to_string()
+        } else {
+            truncate_chars(&cleaned, 60)
+        }
     }
 
     pub fn touch(&mut self) {
@@ -294,6 +308,19 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub fn strip_markdown(line: &str) -> String {
+    let trimmed = line
+        .trim()
+        .trim_start_matches(['#', '>', '-', '*', '+'])
+        .trim();
+    trimmed
+        .chars()
+        .filter(|&c| !matches!(c, '*' | '_' | '`' | '~'))
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
 pub fn truncate_chars(text: &str, max: usize) -> String {
     let mut iter = text.chars();
     let truncated: String = iter.by_ref().take(max).collect();
@@ -363,6 +390,19 @@ mod tests {
             .push(StoredMessage::new("user", "primeira pergunta"));
         conversation.ensure_title();
         assert_eq!(conversation.title, "primeira pergunta");
+    }
+
+    #[test]
+    fn preview_strips_markdown_formatting() {
+        let mut conversation = Conversation::new("c1");
+        conversation.messages.push(StoredMessage::new(
+            "assistant",
+            "\n# **Capítulo 1: Os Arquitetos das Palavras**\nTexto seguinte",
+        ));
+        assert_eq!(
+            conversation.preview(),
+            "Capítulo 1: Os Arquitetos das Palavras"
+        );
     }
 
     #[test]

@@ -4,7 +4,7 @@ mod settings;
 mod sidebar;
 
 use crate::mistral::{Message, MistralClient};
-use crate::storage::{Store, StoredMessage, ThemeChoice};
+use crate::storage::{ truncate_chars, Store, StoredMessage, ThemeChoice};
 use crate::{secrets, theme};
 use eframe::egui;
 use egui::Context;
@@ -12,16 +12,10 @@ use egui_commonmark::CommonMarkCache;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
 use std::sync::Arc;
+use std::time::Instant;
 
 pub const SYSTEM_PROMPT: &str =
     "Você é o NeoChat, um assistente prestativo, claro e conciso. Responda no idioma do usuário.";
-
-pub const SUGGESTIONS: &[&str] = &[
-    "Explique um conceito de forma simples",
-    "Escreva um e-mail profissional",
-    "Resuma este texto em tópicos",
-    "Ajude com um trecho de código",
-];
 
 pub enum Event {
     Token(String),
@@ -61,13 +55,37 @@ pub struct NeoChat {
     pub(super) jump_to_bottom: bool,
     pub(super) focus_composer: bool,
     pub(super) sidebar_collapsed: bool,
+    pub(super) copied_feedback: Option<(usize, Instant)>,
 }
 
 impl NeoChat {
-    pub fn new(cc: &eframe::CreationContext<'_>, store: Store) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, mut store: Store) -> Self {
         theme::install_fonts(&cc.egui_ctx);
         theme::apply(&cc.egui_ctx, store.config.theme);
         cc.egui_ctx.set_zoom_factor(store.config.font_scale);
+
+        // Remove conversas vazias duplicadas acumuladas, mantendo apenas a ativa (ou uma única)
+        let active_id = store.conversations.active.clone();
+        let has_non_empty = store
+            .conversations
+            .items
+            .iter()
+            .any(|c| !c.messages.is_empty());
+        if has_non_empty {
+            store
+                .conversations
+                .items
+                .retain(|c| !c.messages.is_empty() || Some(c.id.as_str()) == active_id.as_deref());
+        } else if store.conversations.items.len() > 1 {
+            let keep_id = active_id.or_else(|| store.conversations.items.first().map(|c| c.id.clone()));
+            store
+                .conversations
+                .items
+                .retain(|c| Some(c.id.as_str()) == keep_id.as_deref());
+        }
+        if store.conversations.active().is_none() {
+            store.conversations.active = store.conversations.items.first().map(|c| c.id.clone());
+        }
 
         let api_key = std::env::var("MISTRAL_API_KEY")
             .ok()
@@ -111,6 +129,7 @@ impl NeoChat {
             jump_to_bottom: false,
             focus_composer: false,
             sidebar_collapsed: false,
+            copied_feedback: None,
         }
     }
 
@@ -225,7 +244,19 @@ impl NeoChat {
         if self.busy() {
             self.stop();
         }
-        self.store.conversations.new_conversation();
+        if let Some(existing_empty) = self
+            .store
+            .conversations
+            .items
+            .iter_mut()
+            .find(|c| c.messages.is_empty())
+        {
+            existing_empty.touch();
+            let id = existing_empty.id.clone();
+            self.store.conversations.active = Some(id);
+        } else {
+            self.store.conversations.new_conversation();
+        }
         self.input.clear();
         self.partial.clear();
         self.error = None;
@@ -242,7 +273,12 @@ impl NeoChat {
         if self.busy() {
             self.stop();
         }
-        self.store.conversations.active = Some(id.to_string());
+        let target_id = id.to_string();
+        self.store
+            .conversations
+            .items
+            .retain(|c| !c.messages.is_empty() || c.id == target_id);
+        self.store.conversations.active = Some(target_id);
         self.partial.clear();
         self.error = None;
         self.status = None;
@@ -596,38 +632,158 @@ impl NeoChat {
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         let colors = theme::chat_colors(ui.ctx().theme());
+        let active_meta = self.store.conversations.active().and_then(|c| {
+            if c.messages.is_empty() && (c.title.trim().is_empty() || c.title == "Nova conversa") {
+                None
+            } else {
+                let title = if c.title.trim().is_empty() {
+                    "Nova conversa".to_string()
+                } else {
+                    c.title.clone()
+                };
+                Some((c.id.clone(), title))
+            }
+        });
+
         egui::Panel::top("top_bar")
             .frame(
                 egui::Frame::new()
-                    .fill(colors.surface)
-                    .inner_margin(egui::Margin::symmetric(14, 8)),
+                    .fill(colors.background)
+                    .inner_margin(egui::Margin::symmetric(16, 10)),
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new("NeoChat")
-                            .size(18.0)
-                            .strong()
-                            .color(colors.accent),
-                    );
-                    ui.add_space(2.0);
-                    ui.label(egui::RichText::new("Mistral").small().color(colors.muted));
+                    let toggle_tooltip = if self.sidebar_collapsed {
+                        "Mostrar barra lateral (Ctrl+B)"
+                    } else {
+                        "Ocultar barra lateral (Ctrl+B)"
+                    };
 
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add(egui::Button::new(
-                                egui::RichText::new("Configurações").size(14.0),
-                            ))
+                    let (rect, resp) =
+                        ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::click());
+                    if resp.hovered() {
+                        ui.painter().rect_filled(
+                            rect,
+                            egui::CornerRadius::same(6),
+                            colors.border.gamma_multiply(0.5),
+                        );
+                    }
+                    let icon_color = if resp.hovered() {
+                        colors.assistant_text
+                    } else {
+                        colors.muted
+                    };
+                    let icon_rect = rect.shrink2(egui::vec2(6.5, 7.5));
+                    ui.painter().rect_stroke(
+                        icon_rect,
+                        egui::CornerRadius::same(2),
+                        egui::Stroke::new(1.3, icon_color),
+                        egui::StrokeKind::Inside,
+                    );
+                    let split_x = icon_rect.left() + 5.0;
+                    ui.painter().vline(
+                        split_x,
+                        icon_rect.y_range(),
+                        egui::Stroke::new(1.3, icon_color),
+                    );
+                    if resp.on_hover_text(toggle_tooltip).clicked() {
+                        self.toggle_sidebar();
+                    }
+
+                    if self.sidebar_collapsed {
+                        let (plus_rect, plus_resp) =
+                            ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::click());
+                        if plus_resp.hovered() {
+                            ui.painter().rect_filled(
+                                plus_rect,
+                                egui::CornerRadius::same(6),
+                                colors.border.gamma_multiply(0.5),
+                            );
+                        }
+                        let plus_color = if plus_resp.hovered() {
+                            colors.assistant_text
+                        } else {
+                            colors.muted
+                        };
+                        let c = plus_rect.center();
+                        let s = 5.5;
+                        ui.painter().hline(
+                            (c.x - s)..=(c.x + s),
+                            c.y,
+                            egui::Stroke::new(1.4, plus_color),
+                        );
+                        ui.painter().vline(
+                            c.x,
+                            (c.y - s)..=(c.y + s),
+                            egui::Stroke::new(1.4, plus_color),
+                        );
+                        if plus_resp
+                            .on_hover_text("Nova conversa (Ctrl+N)")
                             .clicked()
                         {
-                            self.open_settings();
+                            self.new_conversation();
+                        }
+                    }
+
+                    if let Some((active_id, active_title)) = active_meta {
+                        ui.add_space(4.0);
+                        let display_title = truncate_chars(&active_title, 48);
+                        let title_btn = egui::Button::new(
+                            egui::RichText::new(display_title)
+                                .size(13.5)
+                                .color(colors.muted),
+                        )
+                        .frame(false);
+                        if ui
+                            .add(title_btn)
+                            .on_hover_text("Clique para renomear")
+                            .clicked()
+                        {
+                            self.rename = Some((active_id, active_title));
+                            self.rename_focus = true;
+                        }
+                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if self.sidebar_collapsed {
+                            let (cfg_rect, cfg_resp) = ui.allocate_exact_size(
+                                egui::vec2(28.0, 28.0),
+                                egui::Sense::click(),
+                            );
+                            if cfg_resp.hovered() {
+                                ui.painter().rect_filled(
+                                    cfg_rect,
+                                    egui::CornerRadius::same(6),
+                                    colors.border.gamma_multiply(0.5),
+                                );
+                            }
+                            let cfg_color = if cfg_resp.hovered() {
+                                colors.assistant_text
+                            } else {
+                                colors.muted
+                            };
+                            let c = cfg_rect.center();
+                            ui.painter()
+                                .circle_stroke(c, 5.5, egui::Stroke::new(1.3, cfg_color));
+                            ui.painter().circle_filled(c, 1.8, cfg_color);
+                            if cfg_resp
+                                .on_hover_text("Configurações (Ctrl+,)")
+                                .clicked()
+                            {
+                                self.open_settings();
+                            }
+                            ui.add_space(4.0);
                         }
 
                         let models = self.model_list();
                         let mut selected = self.store.config.model.clone();
                         egui::ComboBox::from_id_salt("model_combo")
-                            .width(190.0)
-                            .selected_text(egui::RichText::new(selected.clone()).size(14.0))
+                            .width(175.0)
+                            .selected_text(
+                                egui::RichText::new(selected.clone())
+                                    .size(12.5)
+                                    .color(colors.muted),
+                            )
                             .show_ui(ui, |ui| {
                                 for model in &models {
                                     ui.selectable_value(&mut selected, model.clone(), model);
@@ -639,13 +795,6 @@ impl NeoChat {
                         }
                     });
                 });
-
-                let clip = ui.clip_rect();
-                ui.painter().hline(
-                    clip.x_range(),
-                    clip.bottom() - 0.5,
-                    egui::Stroke::new(1.0, colors.border),
-                );
             });
     }
 }
@@ -676,8 +825,8 @@ impl eframe::App for NeoChat {
         self.poll_test();
         self.poll_login();
 
-        self.top_bar(ui);
         sidebar::sidebar(self, ui);
+        self.top_bar(ui);
         composer::composer(self, ui);
         chat::chat_area(self, ui);
         settings::settings_window(self, &ctx);
@@ -693,27 +842,18 @@ impl eframe::App for NeoChat {
     }
 }
 
-pub(super) fn format_time(timestamp: i64) -> String {
-    use chrono::{Local, TimeZone};
-    Local
-        .timestamp_opt(timestamp, 0)
-        .single()
-        .map(|dt| dt.format("%H:%M").to_string())
-        .unwrap_or_default()
-}
-
-pub(super) fn format_day(timestamp: i64) -> String {
-    use chrono::{Local, TimeZone};
-    Local
-        .timestamp_opt(timestamp, 0)
-        .single()
-        .map(|dt| {
-            let today = Local::now().date_naive();
-            if dt.date_naive() == today {
-                dt.format("%H:%M").to_string()
-            } else {
-                dt.format("%d/%m").to_string()
-            }
-        })
-        .unwrap_or_default()
+pub(super) fn date_group(timestamp: i64) -> &'static str {
+    use chrono::{Duration, Local, TimeZone};
+    let Some(dt) = Local.timestamp_opt(timestamp, 0).single() else {
+        return "Anteriores";
+    };
+    let today = Local::now().date_naive();
+    let day = dt.date_naive();
+    if day == today {
+        "Hoje"
+    } else if day == today - Duration::days(1) {
+        "Ontem"
+    } else {
+        "Anteriores"
+    }
 }
