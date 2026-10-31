@@ -29,10 +29,22 @@ struct ChatRequest<'a> {
     stream: bool,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenUsage {
+    #[serde(default)]
+    pub prompt_tokens: u32,
+    #[serde(default)]
+    pub completion_tokens: u32,
+    #[serde(default)]
+    pub total_tokens: u32,
+}
+
 #[derive(Deserialize)]
 struct StreamChunk {
     #[serde(default)]
     choices: Vec<StreamChoice>,
+    #[serde(default)]
+    usage: Option<TokenUsage>,
 }
 
 #[derive(Deserialize)]
@@ -90,17 +102,20 @@ impl MistralClient {
         messages: &[Message],
         on_token: impl FnMut(&str),
     ) -> Result<String> {
-        self.chat_stream_cancellable(messages, None, on_token).await
+        let (full, _) = self
+            .chat_stream_cancellable(messages, None, on_token)
+            .await?;
+        Ok(full)
     }
 
     /// Como [`Self::chat_stream`], mas interrompe ao ler `cancel`.
-    /// Devolve o que já foi recebido até o cancelamento.
+    /// Devolve o que já foi recebido até o cancelamento e as métricas de uso de tokens (se informadas pela API).
     pub async fn chat_stream_cancellable(
         &self,
         messages: &[Message],
         cancel: Option<&AtomicBool>,
         mut on_token: impl FnMut(&str),
-    ) -> Result<String> {
+    ) -> Result<(String, Option<TokenUsage>)> {
         if self.api_key.trim().is_empty() {
             bail!("informe a chave da API da Mistral nas configuracoes");
         }
@@ -129,6 +144,7 @@ impl MistralClient {
         let mut stream = resp.bytes_stream();
         let mut buffer = String::new();
         let mut full = String::new();
+        let mut usage: Option<TokenUsage> = None;
 
         'outer: while let Some(chunk) = stream.next().await {
             if cancelled(cancel) {
@@ -148,18 +164,25 @@ impl MistralClient {
                     break 'outer;
                 }
                 if let Ok(parsed) = serde_json::from_str::<StreamChunk>(data) {
+                    if let Some(u) = parsed.usage {
+                        if u.total_tokens > 0 || u.completion_tokens > 0 || u.prompt_tokens > 0 {
+                            usage = Some(u);
+                        }
+                    }
                     if let Some(text) = parsed
                         .choices
                         .first()
                         .and_then(|c| c.delta.content.as_deref())
                     {
-                        on_token(text);
-                        full.push_str(text);
+                        if !text.is_empty() {
+                            on_token(text);
+                            full.push_str(text);
+                        }
                     }
                 }
             }
         }
-        Ok(full)
+        Ok((full, usage))
     }
 
     pub async fn test_connection(&self) -> Result<String> {
@@ -244,5 +267,19 @@ mod tests {
         let message = Message::new("user", "ola");
         assert_eq!(message.role, "user");
         assert_eq!(message.content, "ola");
+    }
+
+    #[test]
+    fn stream_chunk_parses_usage() {
+        let raw = r#"{"choices":[{"delta":{"content":""}}],"usage":{"prompt_tokens":24,"completion_tokens":86,"total_tokens":110}}"#;
+        let parsed: StreamChunk = serde_json::from_str(raw).unwrap();
+        assert_eq!(
+            parsed.usage,
+            Some(TokenUsage {
+                prompt_tokens: 24,
+                completion_tokens: 86,
+                total_tokens: 110,
+            })
+        );
     }
 }

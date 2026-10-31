@@ -1,5 +1,5 @@
 use super::NeoChat;
-use crate::storage::StoredMessage;
+use crate::storage::{format_duration_ms, StoredMessage};
 use crate::theme::{self, ChatColors, MAX_CHAT_WIDTH};
 use egui::{
     Align, Align2, Button, Color32, CornerRadius, Frame, Label, Layout, Margin, RichText, Sense,
@@ -106,7 +106,17 @@ pub(super) fn chat_area(app: &mut NeoChat, ui: &mut Ui) {
                                 } else {
                                     app.partial.as_str()
                                 };
-                                streaming_bubble(ui, &colors, &mut cache, text);
+                                let elapsed_ms = app
+                                    .request_started_at
+                                    .map(|t| t.elapsed().as_millis() as u64);
+                                streaming_bubble(
+                                    ui,
+                                    &colors,
+                                    &mut cache,
+                                    text,
+                                    elapsed_ms,
+                                    app.streamed_tokens,
+                                );
                             }
 
                             ui.add_space(28.0);
@@ -217,36 +227,53 @@ fn assistant_bubble(
                     );
                 }
 
-                if !busy {
+                let metrics_summary = message.metrics_summary();
+                if !busy || metrics_summary.is_some() {
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
 
-                        if ghost_action_button(
-                            ui,
-                            colors,
-                            if is_copied { "Copiado" } else { "Copiar" },
-                            is_copied,
-                            ActionIcon::Copy { done: is_copied },
-                        )
-                        .on_hover_text("Copiar resposta")
-                        .clicked()
-                        {
-                            *action = Some(ChatAction::Copy(index, message.content.clone()));
-                        }
-
-                        if is_last
-                            && ghost_action_button(
+                        if !busy {
+                            if ghost_action_button(
                                 ui,
                                 colors,
-                                "Regenerar",
-                                false,
-                                ActionIcon::Regenerate,
+                                if is_copied { "Copiado" } else { "Copiar" },
+                                is_copied,
+                                ActionIcon::Copy { done: is_copied },
                             )
-                            .on_hover_text("Gerar uma nova resposta")
+                            .on_hover_text("Copiar resposta")
                             .clicked()
-                        {
-                            *action = Some(ChatAction::Regenerate);
+                            {
+                                *action = Some(ChatAction::Copy(index, message.content.clone()));
+                            }
+
+                            if is_last
+                                && ghost_action_button(
+                                    ui,
+                                    colors,
+                                    "Regenerar",
+                                    false,
+                                    ActionIcon::Regenerate,
+                                )
+                                .on_hover_text("Gerar uma nova resposta")
+                                .clicked()
+                            {
+                                *action = Some(ChatAction::Regenerate);
+                            }
+                        }
+
+                        if let Some(summary) = metrics_summary {
+                            if !busy {
+                                ui.add_space(6.0);
+                            }
+                            let resp = ui.add(Label::new(
+                                RichText::new(summary)
+                                    .size(11.5)
+                                    .color(colors.muted.gamma_multiply(0.88)),
+                            ));
+                            if let Some(tooltip) = message.metrics_tooltip() {
+                                resp.on_hover_text(tooltip);
+                            }
                         }
                     });
                 }
@@ -352,7 +379,15 @@ fn ghost_action_button(
     resp
 }
 
-fn streaming_bubble(ui: &mut Ui, colors: &ChatColors, cache: &mut CommonMarkCache, text: &str) {
+fn streaming_bubble(
+    ui: &mut Ui,
+    colors: &ChatColors,
+    cache: &mut CommonMarkCache,
+    text: &str,
+    elapsed_ms: Option<u64>,
+    streamed_tokens: u32,
+) {
+    ui.ctx().request_repaint_after(Duration::from_millis(100));
     ui.with_layout(Layout::top_down(Align::Min), |ui| {
         ui.set_max_width(ui.available_width());
         Frame::new()
@@ -360,10 +395,14 @@ fn streaming_bubble(ui: &mut Ui, colors: &ChatColors, cache: &mut CommonMarkCach
             .inner_margin(Margin::symmetric(2, 2))
             .show(ui, |ui| {
                 if text.is_empty() {
+                    let thinking_label = match elapsed_ms.filter(|&ms| ms >= 200) {
+                        Some(ms) => format!("Pensando... ({})", format_duration_ms(ms)),
+                        None => "Pensando...".to_string(),
+                    };
                     ui.horizontal(|ui| {
                         ui.spinner();
                         ui.label(
-                            RichText::new("Pensando...")
+                            RichText::new(thinking_label)
                                 .size(13.5)
                                 .italics()
                                 .color(colors.muted),
@@ -371,6 +410,29 @@ fn streaming_bubble(ui: &mut Ui, colors: &ChatColors, cache: &mut CommonMarkCach
                     });
                 } else {
                     CommonMarkViewer::new().show(ui, cache, text);
+                    let mut live_parts = Vec::new();
+                    if streamed_tokens > 0 {
+                        if streamed_tokens == 1 {
+                            live_parts.push("1 token".to_string());
+                        } else {
+                            live_parts.push(format!("{streamed_tokens} tokens"));
+                        }
+                    }
+                    if let Some(ms) = elapsed_ms.filter(|&ms| ms > 0) {
+                        live_parts.push(format_duration_ms(ms));
+                        if streamed_tokens > 0 && ms >= 200 {
+                            let tps = streamed_tokens as f64 / (ms as f64 / 1000.0);
+                            live_parts.push(format!("{tps:.1} tok/s").replace('.', ","));
+                        }
+                    }
+                    if !live_parts.is_empty() {
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new(live_parts.join(" · "))
+                                .size(11.5)
+                                .color(colors.muted.gamma_multiply(0.88)),
+                        );
+                    }
                 }
             });
     });

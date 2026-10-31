@@ -3,7 +3,7 @@ mod composer;
 mod settings;
 mod sidebar;
 
-use crate::mistral::{Message, MistralClient};
+use crate::mistral::{Message, MistralClient, TokenUsage};
 use crate::storage::{ truncate_chars, Store, StoredMessage, ThemeChoice};
 use crate::{secrets, theme};
 use eframe::egui;
@@ -19,7 +19,7 @@ pub const SYSTEM_PROMPT: &str =
 
 pub enum Event {
     Token(String),
-    Done,
+    Done(Option<TokenUsage>),
     Error(String),
 }
 
@@ -31,6 +31,8 @@ pub struct NeoChat {
     pub(super) partial: String,
     pub(super) rx: Option<Receiver<Event>>,
     pub(super) cancel: Option<Arc<AtomicBool>>,
+    pub(super) request_started_at: Option<Instant>,
+    pub(super) streamed_tokens: u32,
     pub(super) error: Option<String>,
     pub(super) status: Option<String>,
     pub(super) settings_open: bool,
@@ -108,6 +110,8 @@ impl NeoChat {
             partial: String::new(),
             rx: None,
             cancel: None,
+            request_started_at: None,
+            streamed_tokens: 0,
             error: None,
             status: None,
             settings_open: false,
@@ -317,10 +321,28 @@ impl NeoChat {
         self.save();
     }
 
-    fn push_assistant(&mut self, content: String, interrupted: bool) {
+    fn push_assistant(&mut self, content: String, interrupted: bool, usage: Option<TokenUsage>) {
+        let duration_ms = self
+            .request_started_at
+            .take()
+            .map(|t| t.elapsed().as_millis() as u64)
+            .filter(|&ms| ms > 0);
+        let fallback_tokens = (self.streamed_tokens > 0).then_some(self.streamed_tokens);
+        self.streamed_tokens = 0;
+
         if let Some(conversation) = self.store.conversations.active_mut() {
             let mut message = StoredMessage::new("assistant", content);
             message.interrupted = interrupted;
+            message.duration_ms = duration_ms;
+            if let Some(u) = usage {
+                message.prompt_tokens = (u.prompt_tokens > 0).then_some(u.prompt_tokens);
+                message.completion_tokens = (u.completion_tokens > 0)
+                    .then_some(u.completion_tokens)
+                    .or(fallback_tokens);
+                message.total_tokens = (u.total_tokens > 0).then_some(u.total_tokens);
+            } else {
+                message.completion_tokens = fallback_tokens;
+            }
             conversation.messages.push(message);
             conversation.touch();
         }
@@ -379,6 +401,8 @@ impl NeoChat {
         self.rx = Some(rx);
         self.cancel = Some(cancel);
         self.partial.clear();
+        self.request_started_at = Some(Instant::now());
+        self.streamed_tokens = 0;
 
         self.rt.spawn(async move {
             let tx_token = tx.clone();
@@ -390,8 +414,8 @@ impl NeoChat {
                 })
                 .await;
             match result {
-                Ok(_) => {
-                    tx.send(Event::Done).ok();
+                Ok((_, usage)) => {
+                    tx.send(Event::Done(usage)).ok();
                 }
                 Err(err) => {
                     tx.send(Event::Error(format!("{err:#}"))).ok();
@@ -407,7 +431,10 @@ impl NeoChat {
         }
         let reply = std::mem::take(&mut self.partial);
         if !reply.trim().is_empty() {
-            self.push_assistant(reply, true);
+            self.push_assistant(reply, true, None);
+        } else {
+            self.request_started_at = None;
+            self.streamed_tokens = 0;
         }
         self.rx = None;
         self.follow_output = true;
@@ -461,12 +488,16 @@ impl NeoChat {
             match rx.try_recv() {
                 Ok(Event::Token(token)) => {
                     self.partial.push_str(&token);
+                    self.streamed_tokens = self.streamed_tokens.saturating_add(1);
                     self.follow_output = true;
                 }
-                Ok(Event::Done) => {
+                Ok(Event::Done(usage)) => {
                     let reply = std::mem::take(&mut self.partial);
                     if !reply.trim().is_empty() {
-                        self.push_assistant(reply, false);
+                        self.push_assistant(reply, false, usage);
+                    } else {
+                        self.request_started_at = None;
+                        self.streamed_tokens = 0;
                     }
                     self.cancel = None;
                     self.rx = None;
@@ -476,7 +507,10 @@ impl NeoChat {
                     self.error = Some(err);
                     let reply = std::mem::take(&mut self.partial);
                     if !reply.trim().is_empty() {
-                        self.push_assistant(reply, true);
+                        self.push_assistant(reply, true, None);
+                    } else {
+                        self.request_started_at = None;
+                        self.streamed_tokens = 0;
                     }
                     self.cancel = None;
                     self.rx = None;
@@ -489,7 +523,10 @@ impl NeoChat {
                 Err(TryRecvError::Disconnected) => {
                     let reply = std::mem::take(&mut self.partial);
                     if !reply.trim().is_empty() {
-                        self.push_assistant(reply, true);
+                        self.push_assistant(reply, true, None);
+                    } else {
+                        self.request_started_at = None;
+                        self.streamed_tokens = 0;
                     }
                     self.cancel = None;
                     self.rx = None;

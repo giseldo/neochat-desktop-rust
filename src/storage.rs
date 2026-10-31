@@ -81,6 +81,14 @@ pub struct StoredMessage {
     pub timestamp: i64,
     #[serde(default)]
     pub interrupted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u32>,
 }
 
 impl StoredMessage {
@@ -90,6 +98,10 @@ impl StoredMessage {
             content: content.into(),
             timestamp: now(),
             interrupted: false,
+            duration_ms: None,
+            prompt_tokens: None,
+            completion_tokens: None,
+            total_tokens: None,
         }
     }
 
@@ -99,6 +111,72 @@ impl StoredMessage {
 
     pub fn is_user(&self) -> bool {
         self.role == "user"
+    }
+
+    pub fn metrics_summary(&self) -> Option<String> {
+        let mut parts = Vec::new();
+        let out_tokens = self
+            .completion_tokens
+            .filter(|&t| t > 0)
+            .or_else(|| self.total_tokens.filter(|&t| t > 0));
+
+        if let Some(tokens) = out_tokens {
+            if tokens == 1 {
+                parts.push("1 token".to_string());
+            } else {
+                parts.push(format!("{tokens} tokens"));
+            }
+        }
+
+        if let Some(ms) = self.duration_ms.filter(|&ms| ms > 0) {
+            parts.push(format_duration_ms(ms));
+            if let Some(tokens) = self.completion_tokens.filter(|&t| t > 0) {
+                if ms >= 100 {
+                    let tps = tokens as f64 / (ms as f64 / 1000.0);
+                    parts.push(format!("{tps:.1} tok/s").replace('.', ","));
+                }
+            }
+        }
+
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join(" · "))
+        }
+    }
+
+    pub fn metrics_tooltip(&self) -> Option<String> {
+        let mut lines = Vec::new();
+        if let Some(p) = self.prompt_tokens.filter(|&t| t > 0) {
+            lines.push(format!("Prompt: {p} tokens"));
+        }
+        if let Some(c) = self.completion_tokens.filter(|&t| t > 0) {
+            lines.push(format!("Resposta: {c} tokens"));
+        }
+        if let Some(t) = self.total_tokens.filter(|&t| t > 0) {
+            lines.push(format!("Total: {t} tokens"));
+        }
+        if let Some(ms) = self.duration_ms.filter(|&ms| ms > 0) {
+            let secs = format!("{:.2}s", ms as f64 / 1000.0).replace('.', ",");
+            lines.push(format!("Tempo de resposta: {secs}"));
+        }
+        if lines.is_empty() {
+            None
+        } else {
+            Some(lines.join("\n"))
+        }
+    }
+}
+
+pub fn format_duration_ms(ms: u64) -> String {
+    if ms < 1000 {
+        format!("{ms} ms")
+    } else if ms < 60_000 {
+        format!("{:.1}s", ms as f64 / 1000.0).replace('.', ",")
+    } else {
+        let mins = ms / 60_000;
+        let secs = (ms % 60_000) / 1000;
+        format!("{mins}m {secs}s")
     }
 }
 
@@ -427,5 +505,26 @@ mod tests {
         conversations.remove(&second);
         assert_eq!(conversations.active.as_deref(), Some(first.as_str()));
         assert_eq!(conversations.items.len(), 1);
+    }
+
+    #[test]
+    fn message_metrics_formatting() {
+        let mut msg = StoredMessage::new("assistant", "resposta");
+        assert!(msg.metrics_summary().is_none());
+
+        msg.prompt_tokens = Some(20);
+        msg.completion_tokens = Some(50);
+        msg.total_tokens = Some(70);
+        msg.duration_ms = Some(2000);
+
+        assert_eq!(
+            msg.metrics_summary().as_deref(),
+            Some("50 tokens · 2,0s · 25,0 tok/s")
+        );
+        let tooltip = msg.metrics_tooltip().unwrap();
+        assert!(tooltip.contains("Prompt: 20 tokens"));
+        assert!(tooltip.contains("Resposta: 50 tokens"));
+        assert!(tooltip.contains("Total: 70 tokens"));
+        assert!(tooltip.contains("2,00s"));
     }
 }
